@@ -1,0 +1,256 @@
+#+OPTIONS: ^:nil
+#+TITLE: LevelDB Tools
+
+* Querying LeveDB or Snappy Database
+** Backing up the Database
+You need to have a copy of the app database on your development
+machine before you can run these tools. Note that the LevelDB and
+SnappyDB databases are actually maintained as folder (unlike SQLite
+where the database is a file). There is no standard way to
+extract/pull the app files from a non-rooted devices. The most
+reliable way to is to use MyProject's own backup and restore
+feature. The steps are:
+
+     1. Go to "Me" -> "Settings" -> "Enable Preview Features"
+     2. Enable "Enable Backup and Restore"
+     3. Go to "Me" -> "Settings" -> "Backup & Restore"
+     4. Click: "TAKE DATA BACKUP"
+     5. Now go the command console to pull and unzip the backup
+
+If you are running the app on an emulator or on a rooted device or if
+you device permits you pull the app files, then you should ideally
+choose that option. It will be faster and automate-able in that way.
+
+** Tool Location
+
+ PC:  ~$SRCROOT\Andorid\tools\bin\leveldb_*.exe~
+
+ MAC: ~$SRCROOT/Andorid/tools/macbin/leveldb_*~
+
+Note that we have a new folder ~macbin~ under Android/tools directory
+to keep MAC specific binaries.
+
+** Extracting Database from the backup
+#+BEGIN_SRC sh
+c:\Users\harshvs\logs\levellogs>adb pull /sdcard/Download/backup_myproject
+/sdcard/Download/backup_myproject: 1 file pulled. 0.3 MB/s (9499383 bytes in 29.734s)
+
+c:\Users\harshvs\logs\levellogs>unzip backup_myproject
+Archive:  backup_myproject
+  inflating: sql
+  inflating: Focus
+   creating: snappy/
+   creating: myProject/
+  inflating: sharedPref
+  inflating: snappy/LOG
+  inflating: snappy/LOCK
+  inflating: snappy/CURRENT
+  inflating: snappy/LOG.old
+  inflating: snappy/060565.ldb
+  inflating: snappy/060566.ldb
+  inflating: snappy/060563.log
+  inflating: snappy/MANIFEST-060561
+  inflating: snappy/060567.ldb
+  inflating: snappy/060568.ldb
+  inflating: snappy/060569.ldb
+  inflating: snappy/060570.ldb
+  inflating: snappy/060571.ldb
+  inflating: myProject/LOG
+  inflating: myProject/LOCK
+  inflating: myProject/039909.ldb
+  inflating: myProject/039910.log
+  inflating: myProject/CURRENT
+  inflating: myProject/MANIFEST-039908
+  inflating: myProject/LOG.old
+  inflating: myProject/039907.ldb
+#+END_SRC
+     
+** Extracting keys (with /leveldb_listkeys/)
+~leveldb_listkeys~ dumps all the keys present in the database. The key
+count usually ranges > 10K in MyProject, so just dumping the keys on
+console will be overwhelming. It is advisable that we dump all the
+keys in a text file and checkout the actual key names from that
+file. And if you are about the key names or pattern then use grep and
+more to filter out the specific keys.
+
+Usage: ~leveldb_listkeys db_folder_path~
+
+In the following, we have ~8K keys in Shared LevelDB and ~72K! keys in
+the SnappyDB.
+
+#+BEGIN_SRC 
+c:\Users\harshvs\logs\levellogs>leveldb_listkeys.exe myProject | wc
+   8871    8980  473582
+
+c:\Users\harshvs\logs\levellogs>leveldb_listkeys.exe snappy | wc
+  72405   72534 6980457
+
+c:\Users\harshvs\logs\levellogs>leveldb_listkeys.exe  myProject | grep e557a8a6-cac2-4cde-a757-4b8da3632a8b
+User/ProfilePhoto/e557a8a6-cac2-4cde-a757-4b8da3632a8b
+User/ProfileSyncState/e557a8a6-cac2-4cde-a757-4b8da3632a8b
+UserId/USR_e557a8a6-cac2-4cde-a757-4b8da3632a8b
+
+c:\Users\harshvs\logs\levellogs>leveldb_listkeys.exe snappy > keys.txt
+
+c:\Users\harshvs\logs\levellogs>leveldb_listkeys.exe snappy | grep  conversations | more
+conversations
+conversations/00791bed-137d-441f-b399-ff0c47eb04cd/LatestMsgTs
+conversations/00791bed-137d-441f-b399-ff0c47eb04cd/ParticipantFetchState
+.
+.
+.
+conversations/03da46d3-f994-4ee7-b272-27f2ba413bbb/LatestMsgTs
+conversations/03da46d3-f994-4ee7-b272-27f2ba413bbb/ParticipantFetchState
+conversations/03da46d3-f994-4ee7-b272-27f2ba413bbb/conversationState
+conversations/03da46d3-f994-4ee7-b272-27f2ba413bbb/conversationType
+conversations/03da46d3-f994-4ee7-b272-27f2ba413bbb/info
+conversations/03da46d3-f994-4ee7-b272-27f2ba413bbb/isReadOnlyConversation
+-- More  --
+#+END_SRC
+
+** Extracting values (with /leveldb_readkey/)
+
+~leveldb_readkey~ takes the DB folder path and the the list of keys.
+It dumps the values for those keys in the JSON format on STDOUT. The
+the actual key-value data in the LevelDB is stored as a binary slice.
+The challenge is that we can't reliably decode the value unless we
+know the original encoding and type of the value stored for a given
+key. ~leveldb_readkey~ tries its best to print value as string by
+going through the following fallback approach:
+
+1. It first tries to interpret the value as serialized JSON string, it
+   dumps it in the pretty formatted JSON if it is able to do so.
+2. If it fails in #1 attempt, then it tries to interpret the value as
+   a plain string. If successful, it sanitizes the string as a valid
+   JSON string value (for example, converts ~\n -> \\n~). The value is
+   put in special ~__STR~ property. This is to indicate that the value
+   is interpreted as a string.
+3. If it fails in #2 as well, then it converts the value bytes as hex
+   dump. For every hex line (think od) it generates a string
+   value. The value is represented as an array of hex encoded string,
+   one string for each hex line of hex dump. The tool uses ~__HEX~ as
+   the property name to indicate the decoding logic.
+
+It is recommended that you use Programmers' calculator or or some
+hex/od view to interpret the binary encoded values. Integer, Double,
+Boolean and Object values are shown in this format.
+
+Usage: ~leveldb_readkey.exe db_folder_path key1 [key2] [key3] ...~
+
+#+BEGIN_SRC 
+c:\Users\harshvs\logs\levellogs>leveldb_readkey.exe myProject UserId/USR_e557a8a6-cac2-4cde-a757-4b8da3632a8b
+{
+  "UserId/USR_e557a8a6-cac2-4cde-a757-4b8da3632a8b":{
+    "__STR": "+919177100414"
+  }
+}
+
+c:\Users\harshvs\logs\levellogs>leveldb_readkey.exe snappy messages/00006b9b-85ab-46fe-809a-23a18e2b6cbb
+{
+  "messages/00006b9b-85ab-46fe-809a-23a18e2b6cbb":{
+    "content": {
+      "ackType": 5,
+      "ids": [
+        "275a866a-9762-4fdf-821b-50fc3cc8cc84"
+      ]
+    },
+    "conversationId": "a27a3832-d979-4bc0-8803-fe54d839aee7",
+    "flags": 7,
+    "from": "97a072f0-656f-435f-9938-f2d38b72eba4",
+    "id": "00006b9b-85ab-46fe-809a-23a18e2b6cbb",
+    "srt": 0,
+    "timestamp": 1510769735152,
+    "to": "ba304585-4cc2-4bf6-bf66-4bfeb665cf7b",
+    "type": 40,
+    "version": 3
+  }
+}
+c:\Users\harshvs\logs\levellogs>leveldb_readkey.exe  myProject User/ProfilePhoto/e557a8a6-cac2-4cde-a757-4b8da3632a8b User/ProfileSyncState/e557a8a6-cac2-4cde-a757-4b8da3632a8b
+{
+  "User/ProfilePhoto/e557a8a6-cac2-4cde-a757-4b8da3632a8b":{
+    "__STR": "file:////data/user/0/com.mydomain.mobile/files/MyProject/Media/.ProfilePhotos/8c087c3f88884bd8a62115c445aa235d.jpg"
+  },
+  "User/ProfileSyncState/e557a8a6-cac2-4cde-a757-4b8da3632a8b":{
+    "__STR": "4"
+  }
+}
+c:\Users\harshvs\logs\levellogs>leveldb_readkey.exe snappy appUpgrade/task/ANONYMOUS_USERS_UPGRADE/state
+{
+  "appUpgrade/task/ANONYMOUS_USERS_UPGRADE/state":{
+    "__HEX": [
+      "00000000  02 00 00 00                                       |....|",
+      ""
+    ]
+  }
+}
+#+END_SRC
+
+As the output of ~leveldb_readkey~ is a valid JSON, you can
+capture/copy-paste it for further processing. For example you may want
+to use online JSON viewer like: http://jsonviewer.stack.hu/ 
+
+[[./online_result_view.png]]
+
+
+** Using it at command line with grep and xargs
+/Pre-Req/: Make sure that you have common Unix tools (like ~grep~, ~xargs~,
+~more~, ~ag~ etc.) installed on your PC and their location is set in
+your PATH. These tools are available in Mac.
+
+In practice both ~leveldb_listkeys~ and ~leveldb_readkey~ should be
+used in conjunction with ~grep~ and ~xargs~.
+
+Usage: ~leveldb_listkeys DB_FOLDER_PATH | grep KEY_SEARCH_PATTERN | xargs leveldb_readkey DB_FOLDER_PATH~
+
+** Geting all values related to a message id
+#+BEGIN_SRC sh
+c:\Users\harshvs\kz>leveldb_listkeys.exe c:\Users\harshvs\logs\snappydb\snappy | grep 0298d9fe-d2b9-4c7a-9e97-f06a69366a9a | xargs leveldb_readkey c:\Users\harshvs\logs\snappydb\snappy
+{
+  "messages/0298d9fe-d2b9-4c7a-9e97-f06a69366a9a":{
+    "content": {
+      "ackType": 5,
+      "ids": [
+        "787e15af-9b82-4829-a94c-1c6f93c3bca2"
+      ]
+    },
+    "conversationId": "f6e1458d-32d3-4ad4-b439-38afc5dc1808@1",
+    "flags": 7,
+    "from": "e60f8451-0868-4873-af91-453f436ddf77",
+    "id": "0298d9fe-d2b9-4c7a-9e97-f06a69366a9a",
+    "srt": 0,
+    "timestamp": 1517554071773,
+    "to": "b1c62629-881c-49f2-8293-0510b473af44@1",
+    "type": 40,
+    "version": 3
+  },
+  "messages/0298d9fe-d2b9-4c7a-9e97-f06a69366a9a/status":{
+    "__HEX": [
+      "00000000  01 05                                             |..|",
+      ""
+    ]
+  }
+}
+
+c:\Users\harshvs\kz>
+#+END_SRC
+
+For faster searches you should use advanced tool like the Silver
+Searcher (~ag~) than the plain old grep.
+
+** Implementation Notes
+   1. Both tools are written in the Go programming language
+      (https://golang.org/).
+   2. The tools are written with the help of a popular leveldb package
+      ~github.com/syndtr/goleveldb/leveldb~
+   3. The implementation is naive, non-elegant and non-idiomatic. But
+      it does the work. Please improve it if you want, check the TODO
+      section for the pending work.
+   4. These tools are natively complied as executables. They run on
+      the bare metal.
+
+** TODO - Future enhancements
+   1. The use of additional internal node __STR for a plain string
+      value is weired. We should just put the string.
+   2. Long and Boolean is quite common values, we should ideally
+      try to pre-decode it and present it as __INT mode.
+   3. DONE Build and depply native executables for MAC.
